@@ -1,0 +1,67 @@
+body {
+    background-color: #1a1a1a;
+    color: #ffffff;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+}
+
+#game-container {
+    text-align: center;
+}
+
+.status-box {
+    margin-bottom: 20px;
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #287e8f;
+}
+
+.board {
+    display: grid;
+    grid-template-columns: repeat(3, 100px);
+    grid-template-rows: repeat(3, 100px);
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.cell {
+    width: 100px;
+    height: 100px;
+    background-color: #333;
+    border: 2px solid #555;
+    border-radius: 8px;
+    font-size: 2.5rem;
+    color: white;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.cell:hover {
+    background-color: #444;
+}
+
+#reset-btn {
+    padding: 10px 25px;
+    font-size: 1rem;
+    background-color: #ff4757;
+    border: none;
+    border-radius: 5px;
+    color: white;
+    cursor: pointer;
+}
+
+#reset-btn:hover {
+    background-color: #ff6b81;
+}
+/* Kazanan karelerin stili */
+.cell.winner {
+    background-color: #2ecc71 !important; /* Yeşil arka plan */
+    color: #fff;
+    text-decoration: line-through; /* Üstünü çizme */
+    transform: scale(1.1); /* Hafif büyütme efekti */
+    transition: all 0.3s ease;
+}

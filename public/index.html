@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FP Tic Tac Toe</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div id="game-container">
+        <h1>Tic Tac Toe</h1>
+        
+        <div id="status" class="status-box">Yükleniyor...</div>
+
+        <div id="board" class="board"></div>
+
+        <button id="reset-btn">Oyunu Sıfırla</button>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    
+    <script src="TicTacToe.js"></script>
+</body>
+</html>
