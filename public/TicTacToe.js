@@ -1,5 +1,6 @@
 const socket = io(); // Sunucuya bağlantı hattı
 
+// --- SABİTLER VE TANIMLAR ---
 const WINNING_COMBINATIONS = [
     [0, 1, 2], [3, 4, 5], [6, 7, 8],
     [0, 3, 6], [1, 4, 7], [2, 5, 8],
@@ -9,6 +10,18 @@ const WINNING_COMBINATIONS = [
 const player = { X: "PlayerX", O: "PlayerO" };
 const record = { X: "X", O: "O", Empty: "" };
 
+// --- DOM ELEMANLARI ---
+const loginScreen = document.getElementById('login-screen');
+const gameScreen = document.getElementById('game-screen');
+const joinBtn = document.getElementById('join-btn');
+const usernameInput = document.getElementById('username');
+const roomInput = document.getElementById('room-id');
+
+// Global bilgiler
+let currentRoom = null;
+let myUsername = null;
+
+// --- FONKSİYONEL YAPI (OPTION) ---
 const Option = (val) => ({
     map: (fn) => (val != null ? Option(fn(val)) : Option(null)),
     getOrElse: (fallback) => (val != null ? val : fallback),
@@ -28,8 +41,7 @@ const initialState = {
 
 let state = initialState;
 
-// --- SAF MANTIK FONKSİYONLARI ---
-
+// --- OYUN MANTIĞI ---
 const checkWinner = (board) => {
     for (let combo of WINNING_COMBINATIONS) {
         const [a, b, c] = combo;
@@ -63,10 +75,12 @@ const makeMove = (currentState, index) => {
 };
 
 // --- RENDER (EKRANA ÇİZME) ---
-
 const render = () => {
     const boardElement = document.getElementById('board');
     const statusElement = document.getElementById('status');
+    
+    if (!boardElement || !statusElement) return; // Henüz oyun ekranı açılmadıysa çizme
+    
     boardElement.innerHTML = ''; 
 
     const winningIndices = state.winner.map(w => w.indices).getOrElse([]);
@@ -84,61 +98,115 @@ const render = () => {
         boardElement.appendChild(btn);
     });
 
-    const statusMessage = state.winner
-        .map(w => `Kazanan: ${w.player}`)
-        .getOrElse(state.gameActive ? `Sıra: ${state.currentPlayer}` : "Berabere!");
+    // Status mesajını güncelle
+    let statusMessage = '';
+    let statusIcon = '';
     
-    statusElement.innerText = statusMessage;
+    if (state.winner.isDefined()) {
+        const winner = state.winner.getOrElse({ player: '' });
+        statusMessage = `🎉 Kazanan: ${winner.player}`;
+        statusIcon = '🏆';
+    } else if (!state.gameActive) {
+        statusMessage = 'Berabere!';
+        statusIcon = '🤝';
+    } else {
+        statusMessage = `Sıra: ${state.currentPlayer}`;
+        statusIcon = '▶';
+    }
+    
+    statusElement.innerHTML = `
+        <span class="status-icon">${statusIcon}</span>
+        <span class="status-text">${statusMessage}</span>
+    `;
 };
 
-// --- OLAY YÖNETİCİLERİ ---
+// --- DOM YÜKLENDİKTEN SONRA BAŞLAT ---
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOM loaded, initializing game...');
+    
+    // Odaya Katıl Butonu
+    if (joinBtn) {
+        joinBtn.addEventListener('click', () => {
+            const username = usernameInput.value.trim();
+            const room = roomInput.value.trim();
 
-// 1. Senin tıkladığın an (Mesaj gönderir)
+            console.log('Join button clicked!', { username, room });
+
+            if (username && room) {
+                myUsername = username;
+                currentRoom = room;
+
+                console.log(`Joining room: ${room} as ${username}`);
+
+                // Sunucuya odaya katılma isteği gönder
+                socket.emit('joinRoom', { username, room });
+
+                // Ekranları değiştir - active class kullan
+                loginScreen.classList.remove('active');
+                gameScreen.classList.add('active');
+                
+                console.log('Screen switched to game screen');
+                
+                // İlk render
+                render();
+            } else {
+                alert("Lütfen kullanıcı adı ve oda kodu girin!");
+            }
+        });
+    } else {
+        console.error('Join button not found!');
+    }
+
+    // Reset butonu event listener'ı
+    const resetBtn = document.getElementById('reset-btn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', () => {
+            socket.emit('requestReset');
+            state = initialState;
+            render();
+        });
+    }
+});
+
 const handleCellClick = (index) => {
-    // Eğer hamle geçerliyse hem yap hem sunucuya fırlat
     if (state.board[index] === record.Empty && state.gameActive) {
-        
-        // Sunucuya gönderiyoruz
+        // Sunucuya gönder
         socket.emit('playerMove', { 
             index: index, 
             player: state.currentPlayer 
         });
 
-        // Kendi ekranımızda yapıyoruz
+        // Kendi ekranımızda yap
         state = makeMove(state, index); 
         render(); 
     }
 };
 
-// 2. Sıfırla Butonu
-document.getElementById('reset-btn').onclick = () => {
-    // Sunucuya "requestReset" mesajı gönderiyoruz
-    socket.emit('requestReset');
-
-    // Kendi ekranımızı sıfırlıyoruz
-    state = initialState;
-    render();
-    console.log("Oyun senin tarafında sıfırlandı.");
-};
-
 // --- SOCKET DİNLEYİCİLERİ ---
 
-// Rakip hamle yaptığında burası çalışır (Sadece ekranı günceller, tekrar mesaj atmaz)
+socket.on('playerJoined', (data) => {
+    console.log(`${data.username} odaya katıldı!`);
+});
+
 socket.on('moveMade', (data) => {
-    console.log('Rakip hamle yaptı:', data);
-    
+    console.log('Move received:', data);
     if (state.board[data.index] === record.Empty && state.gameActive) {
         state = makeMove(state, data.index);
         render();
     }
 });
 
-// YENİ: Sunucudan gelen sıfırlama emrini dinle
 socket.on('gameReset', () => {
-    console.log('Rakip oyunu sıfırladı, senin ekranın da temizleniyor...');
+    console.log('Game reset received');
     state = initialState;
     render();
 });
 
-// İlk açılışta çiz
-render();
+// Bağlantı durumu logları
+socket.on('connect', () => {
+    console.log('Connected to server:', socket.id);
+});
+
+socket.on('disconnect', () => {
+    console.log('Disconnected from server');
+});

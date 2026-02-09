@@ -9,28 +9,42 @@ const io = new Server(server);
 app.use(express.static('public'));
 
 io.on('connection', (socket) => {
-    console.log('Bir Oyuncu Bağlandı! ID:', socket.id);
+    console.log('Yeni bağlantı:', socket.id);
 
-    // 1. HAMLEYİ YAKALA VE DAĞIT
-    socket.on('playerMove', (data) => {
-        console.log('Hamle iletiliyor:', data);
-        socket.broadcast.emit('moveMade', data);
+    // 1. Odaya Katılma ve İsim Alma
+    socket.on('joinRoom', (data) => {
+        const { username, room } = data;
+
+        // Oyuncuyu odaya sokuyoruz 🏠
+        socket.join(room);
+
+        // Bu bilgileri socket nesnesine kaydediyoruz ki diğer fonksiyonlarda kullanalım
+        socket.username = username;
+        socket.room = room;
+
+        console.log(`${username}, ${room} odasına katıldı.`);
+
+        // Odadaki DİĞER oyuncuya haber veriyoruz
+        socket.to(room).emit('playerJoined', { username });
     });
 
-    // 2. SIFIRLAMA İSTEĞİNİ YAKALA VE DAĞIT (Eksik olan kısım burasıydı!)
+    // 2. Hamleyi Sadece İlgili Odaya Dağıtma
+    socket.on('playerMove', (data) => {
+        // Mesajı gönderen hariç, sadece o odadakilere iletir 🎯
+        socket.to(socket.room).emit('moveMade', data);
+    });
+
+    // 3. Sıfırlama İsteğini Odaya İletme
     socket.on('requestReset', () => {
-        console.log('Sıfırlama isteği geldi, rakibe iletiliyor...');
-        // Mesajı gönderen hariç herkese "gameReset" emrini fırlat
-        socket.broadcast.emit('gameReset');
+        socket.to(socket.room).emit('gameReset');
     });
 
     socket.on('disconnect', () => {
-        console.log('Bir Oyuncu ayrıldı.');
+        console.log(`${socket.username || 'Bir oyuncu'} ayrıldı.`);
     });
 });
 
 const PORT = 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Sunucu hazır! Adres: http://localhost:${PORT}`);
-    console.log('Durdurmak için terminalde Ctrl + C yapabilirsin.');
+    console.log(`🚀 Sunucu http://localhost:${PORT} adresinde hazır!`);
 });
