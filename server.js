@@ -48,16 +48,28 @@ io.on('connection', (socket) => {
 
         console.log(`${username}, ${room} odasına katıldı. Sembol: ${playerSymbol}`);
 
-        // 🆕 Oyuncuya kendi sembolünü söyle
+        // Oda içindeki oyuncu listesini hazırla
+        const playersInfo = rooms[room].players.map(p => ({
+            username: p.username,
+            symbol: p.symbol
+        }));
+
+        // 🆕 Oyuncuya kendi sembolünü ve oyuncu listesini söyle
         socket.emit('assignedSymbol', { 
             symbol: playerSymbol,
-            currentTurn: rooms[room].currentTurn 
+            currentTurn: rooms[room].currentTurn,
+            players: playersInfo
         });
 
         // Odadaki DİĞER oyuncuya haber ver
         socket.to(room).emit('playerJoined', { 
             username,
             symbol: playerSymbol 
+        });
+
+        // 🆕 Tüm odaya güncel oyuncu listesini gönder
+        io.to(room).emit('playersUpdate', {
+            players: playersInfo
         });
 
         // 🆕 Eğer 2 oyuncu da geldiyse oyun başlasın

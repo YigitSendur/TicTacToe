@@ -11,6 +11,7 @@ const WINNING_COMBINATIONS = [
 
 const player = { X: "PlayerX", O: "PlayerO" };
 const record = { X: "X", O: "O", Empty: "" };
+const playerNames = { X: null, O: null }; // Oyuncu isimlerini X / O'ya göre tutacağız
 
 // --- DOM ELEMANLARI ---
 const loginScreen = document.getElementById('login-screen');
@@ -18,6 +19,12 @@ const gameScreen = document.getElementById('game-screen');
 const joinBtn = document.getElementById('join-btn');
 const usernameInput = document.getElementById('username');
 const roomInput = document.getElementById('room-id');
+
+// Oyuncu kartlarındaki isim ve durum alanları
+const playerXNameElement = document.querySelector('.player-x .player-label');
+const playerXStatusElement = document.querySelector('.player-x .player-status');
+const playerONameElement = document.querySelector('.player-o .player-label');
+const playerOStatusElement = document.querySelector('.player-o .player-status');
 
 // 🆕 Global bilgiler - EN ÖNEMLİLER
 let currentRoom = null;
@@ -117,20 +124,29 @@ const render = () => {
     
     if (state.winner.isDefined()) {
         const winner = state.winner.getOrElse({ player: '' });
-        statusMessage = `🎉 Kazanan: ${winner.player}`;
+        const winnerSymbol = winner.player; // 'X' veya 'O'
+        const winnerName = playerNames[winnerSymbol] 
+            || (winnerSymbol === mySymbol ? (myUsername || 'Sen') : 'Rakip');
+
+        statusMessage = `Kazanan: ${winnerName} (${winnerSymbol})`;
         statusIcon = '🏆';
     } else if (!state.gameActive) {
         statusMessage = 'Berabere!';
         statusIcon = '🤝';
     } else {
-        const isMyTurn = (state.currentPlayer === player.X && mySymbol === 'X') || 
-                         (state.currentPlayer === player.O && mySymbol === 'O');
-        
-        if (isMyTurn) {
-            statusMessage = `Senin sıran! (${mySymbol})`;
+        const isMyTurnNow = (state.currentPlayer === player.X && mySymbol === 'X') || 
+                            (state.currentPlayer === player.O && mySymbol === 'O');
+
+        if (isMyTurnNow) {
+            const displayName = myUsername || 'Sen';
+            const currentSymbol = mySymbol || (state.currentPlayer === player.X ? 'X' : 'O');
+            statusMessage = `${displayName}'in sırası! (${currentSymbol})`;
             statusIcon = '▶️';
         } else {
-            statusMessage = `Rakibin sırası... (${state.currentPlayer === player.X ? 'X' : 'O'})`;
+            const mySym = mySymbol || (state.currentPlayer === player.X ? 'X' : 'O');
+            const opponentSymbol = mySym === 'X' ? 'O' : 'X';
+            const opponentName = playerNames[opponentSymbol] || 'Rakibin';
+            statusMessage = `${opponentName}'in sırası... (${opponentSymbol})`;
             statusIcon = '⏳';
         }
     }
@@ -139,6 +155,32 @@ const render = () => {
         <span class="status-icon">${statusIcon}</span>
         <span class="status-text">${statusMessage}</span>
     `;
+
+    // Oyuncu kartlarındaki isimleri güncelle
+    if (playerXNameElement) {
+        playerXNameElement.textContent = playerNames.X || 'Player X';
+    }
+    if (playerONameElement) {
+        playerONameElement.textContent = playerNames.O || 'Player O';
+    }
+
+    // Oyuncu kartlarındaki durumları güncelle
+    if (playerXStatusElement && playerOStatusElement) {
+        const currentSymbol = state.currentPlayer === player.X ? 'X' : 'O';
+
+        if (!state.gameActive && !state.winner.isDefined()) {
+            playerXStatusElement.textContent = 'Berabere';
+            playerOStatusElement.textContent = 'Berabere';
+        } else if (state.winner.isDefined()) {
+            const winner = state.winner.getOrElse({ player: '' });
+            const winnerSymbol = winner.player;
+            playerXStatusElement.textContent = winnerSymbol === 'X' ? 'Kazandı' : 'Kaybetti';
+            playerOStatusElement.textContent = winnerSymbol === 'O' ? 'Kazandı' : 'Kaybetti';
+        } else {
+            playerXStatusElement.textContent = currentSymbol === 'X' ? 'Sırası' : 'Bekliyor...';
+            playerOStatusElement.textContent = currentSymbol === 'O' ? 'Sırası' : 'Bekliyor...';
+        }
+    }
 };
 
 // --- DOM YÜKLENDİKTEN SONRA BAŞLAT ---
@@ -204,13 +246,38 @@ const handleCellClick = (index) => {
 socket.on('assignedSymbol', (data) => {
     mySymbol = data.symbol;
     console.log(`🎯 Bana atanan sembol: ${mySymbol}`);
-    
+
+    // Sunucudan gelen oyuncu listesi varsa isimleri güncelle
+    if (data.players && Array.isArray(data.players)) {
+        data.players.forEach(p => {
+            if (p.symbol === 'X') playerNames.X = p.username;
+            if (p.symbol === 'O') playerNames.O = p.username;
+        });
+    } else {
+        // Oyuncu listesi gelmediyse en azından kendi ismimizi eşleştirelim
+        if (mySymbol === 'X') playerNames.X = myUsername;
+        if (mySymbol === 'O') playerNames.O = myUsername;
+    }
+
     // İlk render
     render();
 });
 
 socket.on('playerJoined', (data) => {
     console.log(`${data.username} odaya katıldı! Sembol: ${data.symbol}`);
+});
+
+// Oda içindeki oyuncu listesi güncellendiğinde çalışır
+socket.on('playersUpdate', (data) => {
+    if (data.players && Array.isArray(data.players)) {
+        data.players.forEach(p => {
+            if (p.symbol === 'X') playerNames.X = p.username;
+            if (p.symbol === 'O') playerNames.O = p.username;
+        });
+
+        // Oyuncu kartlarını ve üstteki durumu güncelle
+        render();
+    }
 });
 
 // 🆕 Oyun hazır - 2 oyuncu da geldi
