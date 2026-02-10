@@ -1,319 +1,152 @@
-console.log("JS dosyası başarıyla yüklendi! ✅");
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
 
-const socket = io();
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
 
-// --- SABİTLER VE TANIMLAR ---
-const WINNING_COMBINATIONS = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8],
-    [0, 3, 6], [1, 4, 7], [2, 5, 8],
-    [0, 4, 8], [2, 4, 6]            
-];
+app.use(express.static('public'));
 
-const player = { X: "PlayerX", O: "PlayerO" };
-const record = { X: "X", O: "O", Empty: "" };
-const playerNames = { X: null, O: null }; // Oyuncu isimlerini X / O'ya göre tutacağız
+// 🎮 OYUN ODALARI - Her oda için oyun durumunu saklıyoruz
+const rooms = {};
 
-// --- DOM ELEMANLARI ---
-const loginScreen = document.getElementById('login-screen');
-const gameScreen = document.getElementById('game-screen');
-const joinBtn = document.getElementById('join-btn');
-const usernameInput = document.getElementById('username');
-const roomInput = document.getElementById('room-id');
+io.on('connection', (socket) => {
+    console.log('Yeni bağlantı:', socket.id);
 
-// Oyuncu kartlarındaki isim ve durum alanları
-const playerXNameElement = document.querySelector('.player-x .player-label');
-const playerXStatusElement = document.querySelector('.player-x .player-status');
-const playerONameElement = document.querySelector('.player-o .player-label');
-const playerOStatusElement = document.querySelector('.player-o .player-status');
+    // 1️⃣ ODAYA KATILMA
+    socket.on('joinRoom', (data) => {
+        const { username, room } = data;
 
-// 🆕 Global bilgiler - EN ÖNEMLİLER
-let currentRoom = null;
-let myUsername = null;
-let mySymbol = null;  // 🆕 BENİM SEMBOLÜM (X veya O)
+        // Oyuncuyu odaya sokuyoruz 🏠
+        socket.join(room);
 
-// --- FONKSİYONEL YAPI (OPTION) ---
-const Option = (val) => ({
-    map: (fn) => (val != null ? Option(fn(val)) : Option(null)),
-    getOrElse: (fallback) => (val != null ? val : fallback),
-    isDefined: () => val != null,
-    fold: (onNone, onSome) => (val != null ? onSome(val) : onNone()),
-});
+        // Bu bilgileri socket nesnesine kaydediyoruz
+        socket.username = username;
+        socket.room = room;
 
-const Some = (val) => Option(val);
-const None = () => Option(null);
-
-const initialState = {
-    board: Array(9).fill(record.Empty),
-    currentPlayer: player.X,
-    gameActive: true,
-    winner: None(), 
-};
-
-let state = initialState;
-
-// --- OYUN MANTIĞI ---
-const checkWinner = (board) => {
-    for (let combo of WINNING_COMBINATIONS) {
-        const [a, b, c] = combo;
-        if (board[a] !== record.Empty && board[a] === board[b] && board[a] === board[c]) {
-            return Some({ player: board[a], indices: combo });
+        // 🆕 Oda yoksa oluştur
+        if (!rooms[room]) {
+            rooms[room] = {
+                players: [],
+                currentTurn: 'X',  // İlk sıra X'te
+                board: Array(9).fill(''),
+                gameActive: true
+            };
         }
-    }
-    return None();
-};
 
-const makeMove = (currentState, index) => {
-    if (currentState.board[index] !== record.Empty || !currentState.gameActive) {
-        return currentState;
-    }
-
-    const updatedBoard = [...currentState.board];
-    updatedBoard[index] = currentState.currentPlayer === player.X ? record.X : record.O;
-
-    const winnerOpt = checkWinner(updatedBoard);
-    const isDraw = !winnerOpt.isDefined() && !updatedBoard.includes(record.Empty);
-
-    return {
-        ...currentState,
-        board: updatedBoard,
-        gameActive: !winnerOpt.isDefined() && !isDraw,
-        winner: winnerOpt,
-        currentPlayer: (winnerOpt.isDefined() || isDraw) 
-            ? currentState.currentPlayer 
-            : (currentState.currentPlayer === player.X ? player.O : player.X)
-    };
-};
-
-// --- RENDER (EKRANA ÇİZME) ---
-const render = () => {
-    const boardElement = document.getElementById('board');
-    const statusElement = document.getElementById('status');
-    
-    if (!boardElement || !statusElement) return;
-    
-    boardElement.innerHTML = ''; 
-
-    const winningIndices = state.winner.map(w => w.indices).getOrElse([]);
-
-    state.board.forEach((cell, index) => {
-        const btn = document.createElement('button');
-        btn.classList.add('cell');
+        // 🆕 Oyuncuyu odaya ekle ve sembol ata
+        const playerSymbol = rooms[room].players.length === 0 ? 'X' : 'O';
         
-        if (winningIndices.includes(index)) {
-            btn.classList.add('winner');
-        }
+        rooms[room].players.push({
+            id: socket.id,
+            username: username,
+            symbol: playerSymbol
+        });
 
-        // 🆕 SIRA KONTROLÜ - Buton aktif mi?
-        const isMyTurn = (state.currentPlayer === player.X && mySymbol === 'X') || 
-                         (state.currentPlayer === player.O && mySymbol === 'O');
-        
-        // Eğer benim sıram değilse veya hücre doluysa butonu disable et
-        if (!isMyTurn || cell !== record.Empty || !state.gameActive) {
-            btn.disabled = true;
-            btn.classList.add('disabled');
-        }
+        socket.playerSymbol = playerSymbol;  // Oyuncunun sembolünü sakla
 
-        btn.innerText = cell;
-        btn.onclick = () => handleCellClick(index);
-        boardElement.appendChild(btn);
+        console.log(`${username}, ${room} odasına katıldı. Sembol: ${playerSymbol}`);
+
+        // 🆕 Oyuncuya kendi sembolünü söyle
+        socket.emit('assignedSymbol', { 
+            symbol: playerSymbol,
+            currentTurn: rooms[room].currentTurn 
+        });
+
+        // Odadaki DİĞER oyuncuya haber ver
+        socket.to(room).emit('playerJoined', { 
+            username,
+            symbol: playerSymbol 
+        });
+
+        // 🆕 Eğer 2 oyuncu da geldiyse oyun başlasın
+        if (rooms[room].players.length === 2) {
+            io.to(room).emit('gameReady', {
+                message: 'Oyun başlıyor!',
+                currentTurn: rooms[room].currentTurn
+            });
+        }
     });
 
-    // 🆕 Status mesajını güncelle - Senin sıran mı göster
-    let statusMessage = '';
-    let statusIcon = '';
-    
-    if (state.winner.isDefined()) {
-        const winner = state.winner.getOrElse({ player: '' });
-        const winnerSymbol = winner.player; // 'X' veya 'O'
-        const winnerName = playerNames[winnerSymbol] 
-            || (winnerSymbol === mySymbol ? (myUsername || 'Sen') : 'Rakip');
+    // 2️⃣ HAMLE YAPMA - SIRA KONTROLÜ İLE
+    socket.on('playerMove', (data) => {
+        const room = socket.room;
+        const roomData = rooms[room];
 
-        statusMessage = `Kazanan: ${winnerName} (${winnerSymbol})`;
-        statusIcon = '🏆';
-    } else if (!state.gameActive) {
-        statusMessage = 'Berabere!';
-        statusIcon = '🤝';
-    } else {
-        const isMyTurnNow = (state.currentPlayer === player.X && mySymbol === 'X') || 
-                            (state.currentPlayer === player.O && mySymbol === 'O');
-
-        if (isMyTurnNow) {
-            const displayName = myUsername || 'Sen';
-            const currentSymbol = mySymbol || (state.currentPlayer === player.X ? 'X' : 'O');
-            statusMessage = `${displayName}'in sırası! (${currentSymbol})`;
-            statusIcon = '▶️';
-        } else {
-            const mySym = mySymbol || (state.currentPlayer === player.X ? 'X' : 'O');
-            const opponentSymbol = mySym === 'X' ? 'O' : 'X';
-            const opponentName = playerNames[opponentSymbol] || 'Rakibin';
-            statusMessage = `${opponentName}'in sırası... (${opponentSymbol})`;
-            statusIcon = '⏳';
+        if (!roomData) {
+            console.log('❌ Oda bulunamadı!');
+            return;
         }
-    }
-    
-    statusElement.innerHTML = `
-        <span class="status-icon">${statusIcon}</span>
-        <span class="status-text">${statusMessage}</span>
-    `;
 
-    // Oyuncu kartlarındaki isimleri güncelle
-    if (playerXNameElement) {
-        playerXNameElement.textContent = playerNames.X || 'Player X';
-    }
-    if (playerONameElement) {
-        playerONameElement.textContent = playerNames.O || 'Player O';
-    }
-
-    // Oyuncu kartlarındaki durumları güncelle
-    if (playerXStatusElement && playerOStatusElement) {
-        const currentSymbol = state.currentPlayer === player.X ? 'X' : 'O';
-
-        if (!state.gameActive && !state.winner.isDefined()) {
-            playerXStatusElement.textContent = 'Berabere';
-            playerOStatusElement.textContent = 'Berabere';
-        } else if (state.winner.isDefined()) {
-            const winner = state.winner.getOrElse({ player: '' });
-            const winnerSymbol = winner.player;
-            playerXStatusElement.textContent = winnerSymbol === 'X' ? 'Kazandı' : 'Kaybetti';
-            playerOStatusElement.textContent = winnerSymbol === 'O' ? 'Kazandı' : 'Kaybetti';
-        } else {
-            playerXStatusElement.textContent = currentSymbol === 'X' ? 'Sırası' : 'Bekliyor...';
-            playerOStatusElement.textContent = currentSymbol === 'O' ? 'Sırası' : 'Bekliyor...';
+        // 🔒 SIRA KONTROLÜ - En önemli kısım!
+        if (socket.playerSymbol !== roomData.currentTurn) {
+            console.log(`❌ ${socket.username} sırası olmadan hamle yapmaya çalıştı!`);
+            socket.emit('invalidMove', { 
+                message: 'Senin sıran değil!' 
+            });
+            return;
         }
-    }
-};
 
-// --- DOM YÜKLENDİKTEN SONRA BAŞLAT ---
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('DOM loaded, initializing game...');
-    
-    if (joinBtn) {
-        joinBtn.addEventListener('click', () => {
-            const username = usernameInput.value.trim();
-            const room = roomInput.value.trim();
+        // 🔒 Hücre boş mu kontrol et
+        if (roomData.board[data.index] !== '') {
+            console.log('❌ Bu hücre dolu!');
+            socket.emit('invalidMove', { 
+                message: 'Bu hücre dolu!' 
+            });
+            return;
+        }
 
-            if (username && room) {
-                myUsername = username;
-                currentRoom = room;
-
-                console.log(`Joining room: ${room} as ${username}`);
-
-                socket.emit('joinRoom', { username, room });
-
-                loginScreen.classList.remove('active');
-                gameScreen.classList.add('active');
-                
-                console.log('Screen switched to game screen');
-            } else {
-                alert("Lütfen kullanıcı adı ve oda kodu girin!");
-            }
-        });
-    }
-
-    const resetBtn = document.getElementById('reset-btn');
-    if (resetBtn) {
-        resetBtn.addEventListener('click', () => {
-            socket.emit('requestReset');
-        });
-    }
-});
-
-// 🆕 HAMLE YAPMA - Sıra kontrolü ile
-const handleCellClick = (index) => {
-    // Benim sıram mı kontrol et
-    const isMyTurn = (state.currentPlayer === player.X && mySymbol === 'X') || 
-                     (state.currentPlayer === player.O && mySymbol === 'O');
-    
-    if (!isMyTurn) {
-        console.log('❌ Senin sıran değil!');
-        return;
-    }
-
-    if (state.board[index] === record.Empty && state.gameActive) {
-        console.log(`✅ Hamle yapıyorum: ${index}`);
+        // ✅ Hamle geçerli - kaydet ve ilet
+        roomData.board[data.index] = socket.playerSymbol;
         
-        // Sunucuya gönder
-        socket.emit('playerMove', { 
-            index: index, 
-            player: state.currentPlayer 
+        console.log(`✅ ${socket.username} (${socket.playerSymbol}) hamle yaptı: ${data.index}`);
+
+        // Sırayı değiştir
+        roomData.currentTurn = roomData.currentTurn === 'X' ? 'O' : 'X';
+
+        // Herkese hamleyi bildir
+        io.to(room).emit('moveMade', {
+            index: data.index,
+            player: socket.playerSymbol,
+            currentTurn: roomData.currentTurn
         });
-    }
-};
+    });
 
-// --- SOCKET DİNLEYİCİLERİ ---
+    // 3️⃣ SIFIRLAMA
+    socket.on('requestReset', () => {
+        const room = socket.room;
+        
+        if (rooms[room]) {
+            rooms[room].board = Array(9).fill('');
+            rooms[room].currentTurn = 'X';
+            rooms[room].gameActive = true;
+            
+            io.to(room).emit('gameReset', {
+                currentTurn: 'X'
+            });
+        }
+    });
 
-// 🆕 Server bana sembolümü söylüyor
-socket.on('assignedSymbol', (data) => {
-    mySymbol = data.symbol;
-    console.log(`🎯 Bana atanan sembol: ${mySymbol}`);
-
-    // Sunucudan gelen oyuncu listesi varsa isimleri güncelle
-    if (data.players && Array.isArray(data.players)) {
-        data.players.forEach(p => {
-            if (p.symbol === 'X') playerNames.X = p.username;
-            if (p.symbol === 'O') playerNames.O = p.username;
-        });
-    } else {
-        // Oyuncu listesi gelmediyse en azından kendi ismimizi eşleştirelim
-        if (mySymbol === 'X') playerNames.X = myUsername;
-        if (mySymbol === 'O') playerNames.O = myUsername;
-    }
-
-    // İlk render
-    render();
+    // 4️⃣ AYRILMA
+    socket.on('disconnect', () => {
+        console.log(`${socket.username || 'Bir oyuncu'} ayrıldı.`);
+        
+        const room = socket.room;
+        if (rooms[room]) {
+            // Oyuncuyu listeden çıkar
+            rooms[room].players = rooms[room].players.filter(p => p.id !== socket.id);
+            
+            // Oda boşsa sil
+            if (rooms[room].players.length === 0) {
+                delete rooms[room];
+                console.log(`🗑️ ${room} odası silindi.`);
+            }
+        }
+    });
 });
 
-socket.on('playerJoined', (data) => {
-    console.log(`${data.username} odaya katıldı! Sembol: ${data.symbol}`);
-});
-
-// Oda içindeki oyuncu listesi güncellendiğinde çalışır
-socket.on('playersUpdate', (data) => {
-    if (data.players && Array.isArray(data.players)) {
-        data.players.forEach(p => {
-            if (p.symbol === 'X') playerNames.X = p.username;
-            if (p.symbol === 'O') playerNames.O = p.username;
-        });
-
-        // Oyuncu kartlarını ve üstteki durumu güncelle
-        render();
-    }
-});
-
-// 🆕 Oyun hazır - 2 oyuncu da geldi
-socket.on('gameReady', (data) => {
-    console.log('✅ Oyun başlıyor!', data);
-    render();
-});
-
-// 🆕 Hamle yapıldı - state'i güncelle
-socket.on('moveMade', (data) => {
-    console.log('📥 Hamle alındı:', data);
-    
-    // State'i güncelle
-    state = makeMove(state, data.index);
-    
-    // Ekranı yenile
-    render();
-});
-
-// 🆕 Geçersiz hamle uyarısı
-socket.on('invalidMove', (data) => {
-    console.log('❌ Geçersiz hamle:', data.message);
-    alert(data.message);
-});
-
-// Oyun sıfırlandı
-socket.on('gameReset', (data) => {
-    console.log('🔄 Oyun sıfırlandı');
-    state = initialState;
-    render();
-});
-
-socket.on('connect', () => {
-    console.log('✅ Sunucuya bağlandı:', socket.id);
-});
-
-socket.on('disconnect', () => {
-    console.log('❌ Sunucudan ayrıldı');
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 Sunucu http://localhost:${PORT} adresinde hazır!`);
 });
