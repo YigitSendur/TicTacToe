@@ -1,3 +1,5 @@
+console.log("JS dosyası başarıyla yüklendi! ✅");
+
 const socket = io(); // Sunucuya bağlantı hattı
 
 // --- SABİTLER VE TANIMLAR ---
