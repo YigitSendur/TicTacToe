@@ -1,6 +1,6 @@
 console.log("JS dosyası başarıyla yüklendi! ✅");
 
-const socket = io(); // Sunucuya bağlantı hattı
+const socket = io();
 
 // --- SABİTLER VE TANIMLAR ---
 const WINNING_COMBINATIONS = [
@@ -19,9 +19,10 @@ const joinBtn = document.getElementById('join-btn');
 const usernameInput = document.getElementById('username');
 const roomInput = document.getElementById('room-id');
 
-// Global bilgiler
+// 🆕 Global bilgiler - EN ÖNEMLİLER
 let currentRoom = null;
 let myUsername = null;
+let mySymbol = null;  // 🆕 BENİM SEMBOLÜM (X veya O)
 
 // --- FONKSİYONEL YAPI (OPTION) ---
 const Option = (val) => ({
@@ -81,7 +82,7 @@ const render = () => {
     const boardElement = document.getElementById('board');
     const statusElement = document.getElementById('status');
     
-    if (!boardElement || !statusElement) return; // Henüz oyun ekranı açılmadıysa çizme
+    if (!boardElement || !statusElement) return;
     
     boardElement.innerHTML = ''; 
 
@@ -95,12 +96,22 @@ const render = () => {
             btn.classList.add('winner');
         }
 
+        // 🆕 SIRA KONTROLÜ - Buton aktif mi?
+        const isMyTurn = (state.currentPlayer === player.X && mySymbol === 'X') || 
+                         (state.currentPlayer === player.O && mySymbol === 'O');
+        
+        // Eğer benim sıram değilse veya hücre doluysa butonu disable et
+        if (!isMyTurn || cell !== record.Empty || !state.gameActive) {
+            btn.disabled = true;
+            btn.classList.add('disabled');
+        }
+
         btn.innerText = cell;
         btn.onclick = () => handleCellClick(index);
         boardElement.appendChild(btn);
     });
 
-    // Status mesajını güncelle
+    // 🆕 Status mesajını güncelle - Senin sıran mı göster
     let statusMessage = '';
     let statusIcon = '';
     
@@ -112,8 +123,16 @@ const render = () => {
         statusMessage = 'Berabere!';
         statusIcon = '🤝';
     } else {
-        statusMessage = `Sıra: ${state.currentPlayer}`;
-        statusIcon = '▶';
+        const isMyTurn = (state.currentPlayer === player.X && mySymbol === 'X') || 
+                         (state.currentPlayer === player.O && mySymbol === 'O');
+        
+        if (isMyTurn) {
+            statusMessage = `Senin sıran! (${mySymbol})`;
+            statusIcon = '▶️';
+        } else {
+            statusMessage = `Rakibin sırası... (${state.currentPlayer === player.X ? 'X' : 'O'})`;
+            statusIcon = '⏳';
+        }
     }
     
     statusElement.innerHTML = `
@@ -126,13 +145,10 @@ const render = () => {
 document.addEventListener('DOMContentLoaded', () => {
     console.log('DOM loaded, initializing game...');
     
-    // Odaya Katıl Butonu
     if (joinBtn) {
         joinBtn.addEventListener('click', () => {
             const username = usernameInput.value.trim();
             const room = roomInput.value.trim();
-
-            console.log('Join button clicked!', { username, room });
 
             if (username && room) {
                 myUsername = username;
@@ -140,75 +156,97 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 console.log(`Joining room: ${room} as ${username}`);
 
-                // Sunucuya odaya katılma isteği gönder
                 socket.emit('joinRoom', { username, room });
 
-                // Ekranları değiştir - active class kullan
                 loginScreen.classList.remove('active');
                 gameScreen.classList.add('active');
                 
                 console.log('Screen switched to game screen');
-                
-                // İlk render
-                render();
             } else {
                 alert("Lütfen kullanıcı adı ve oda kodu girin!");
             }
         });
-    } else {
-        console.error('Join button not found!');
     }
 
-    // Reset butonu event listener'ı
     const resetBtn = document.getElementById('reset-btn');
     if (resetBtn) {
         resetBtn.addEventListener('click', () => {
             socket.emit('requestReset');
-            state = initialState;
-            render();
         });
     }
 });
 
+// 🆕 HAMLE YAPMA - Sıra kontrolü ile
 const handleCellClick = (index) => {
+    // Benim sıram mı kontrol et
+    const isMyTurn = (state.currentPlayer === player.X && mySymbol === 'X') || 
+                     (state.currentPlayer === player.O && mySymbol === 'O');
+    
+    if (!isMyTurn) {
+        console.log('❌ Senin sıran değil!');
+        return;
+    }
+
     if (state.board[index] === record.Empty && state.gameActive) {
+        console.log(`✅ Hamle yapıyorum: ${index}`);
+        
         // Sunucuya gönder
         socket.emit('playerMove', { 
             index: index, 
             player: state.currentPlayer 
         });
-
-        // Kendi ekranımızda yap
-        state = makeMove(state, index); 
-        render(); 
     }
 };
 
 // --- SOCKET DİNLEYİCİLERİ ---
 
+// 🆕 Server bana sembolümü söylüyor
+socket.on('assignedSymbol', (data) => {
+    mySymbol = data.symbol;
+    console.log(`🎯 Bana atanan sembol: ${mySymbol}`);
+    
+    // İlk render
+    render();
+});
+
 socket.on('playerJoined', (data) => {
-    console.log(`${data.username} odaya katıldı!`);
+    console.log(`${data.username} odaya katıldı! Sembol: ${data.symbol}`);
 });
 
+// 🆕 Oyun hazır - 2 oyuncu da geldi
+socket.on('gameReady', (data) => {
+    console.log('✅ Oyun başlıyor!', data);
+    render();
+});
+
+// 🆕 Hamle yapıldı - state'i güncelle
 socket.on('moveMade', (data) => {
-    console.log('Move received:', data);
-    if (state.board[data.index] === record.Empty && state.gameActive) {
-        state = makeMove(state, data.index);
-        render();
-    }
+    console.log('📥 Hamle alındı:', data);
+    
+    // State'i güncelle
+    state = makeMove(state, data.index);
+    
+    // Ekranı yenile
+    render();
 });
 
-socket.on('gameReset', () => {
-    console.log('Game reset received');
+// 🆕 Geçersiz hamle uyarısı
+socket.on('invalidMove', (data) => {
+    console.log('❌ Geçersiz hamle:', data.message);
+    alert(data.message);
+});
+
+// Oyun sıfırlandı
+socket.on('gameReset', (data) => {
+    console.log('🔄 Oyun sıfırlandı');
     state = initialState;
     render();
 });
 
-// Bağlantı durumu logları
 socket.on('connect', () => {
-    console.log('Connected to server:', socket.id);
+    console.log('✅ Sunucuya bağlandı:', socket.id);
 });
 
 socket.on('disconnect', () => {
-    console.log('Disconnected from server');
+    console.log('❌ Sunucudan ayrıldı');
 });
