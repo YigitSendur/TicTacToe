@@ -4,11 +4,70 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+
+// ✅ CORS ayarları
+const io = new Server(server, {
+    cors: {
+        origin: [
+            "https://yigitsendur.github.io",
+            "http://localhost:5500",
+            "http://127.0.0.1:5500"
+        ],
+        methods: ["GET", "POST"],
+        credentials: true
+    }
+});
 
 app.use(express.static('public'));
 
-// 🎮 OYUN ODALARI - Her oda için oyun durumunu saklıyoruz
+// 🎮 OYUN MANTIĞI - BACKEND'DE!
+const WINNING_COMBINATIONS = [
+    [0, 1, 2], [3, 4, 5], [6, 7, 8],  // Yatay
+    [0, 3, 6], [1, 4, 7], [2, 5, 8],  // Dikey
+    [0, 4, 8], [2, 4, 6]              // Çapraz
+];
+
+/**
+ * Kazananı kontrol et
+ * @param {Array} board - Oyun tahtası
+ * @returns {string|null} - "X", "O" veya null
+ */
+function checkWinner(board) {
+    for (const combo of WINNING_COMBINATIONS) {
+        const [a, b, c] = combo;
+        if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+            return board[a];
+        }
+    }
+    return null;
+}
+
+/**
+ * Beraberlik kontrolü
+ * @param {Array} board - Oyun tahtası
+ * @returns {boolean}
+ */
+function checkDraw(board) {
+    return !board.includes('') && !checkWinner(board);
+}
+
+/**
+ * Kazanan kombinasyonu bul
+ * @param {Array} board - Oyun tahtası
+ * @param {string} winner - Kazanan sembol
+ * @returns {Array} - Kazanan indeksler
+ */
+function getWinningIndices(board, winner) {
+    for (const combo of WINNING_COMBINATIONS) {
+        const [a, b, c] = combo;
+        if (board[a] === winner && board[b] === winner && board[c] === winner) {
+            return combo;
+        }
+    }
+    return [];
+}
+
+// 🎮 OYUN ODALARI
 const rooms = {};
 
 io.on('connection', (socket) => {
@@ -18,126 +77,197 @@ io.on('connection', (socket) => {
     socket.on('joinRoom', (data) => {
         const { username, room } = data;
 
-        // Oyuncuyu odaya sokuyoruz 🏠
         socket.join(room);
-
-        // Bu bilgileri socket nesnesine kaydediyoruz
         socket.username = username;
         socket.room = room;
 
-        // 🆕 Oda yoksa oluştur
+        // Oda yoksa oluştur
         if (!rooms[room]) {
             rooms[room] = {
                 players: [],
-                currentTurn: 'X',  // İlk sıra X'te
+                currentTurn: 'X',
                 board: Array(9).fill(''),
-                gameActive: true
+                gameActive: true,
+                winner: null,
+                winningIndices: []
             };
         }
 
-        // 🆕 Oyuncuyu odaya ekle ve sembol ata
-        const playerSymbol = rooms[room].players.length === 0 ? 'X' : 'O';
+        const roomData = rooms[room];
+
+        // Oyuncuyu ekle ve sembol ata
+        const playerSymbol = roomData.players.length === 0 ? 'X' : 'O';
         
-        rooms[room].players.push({
+        roomData.players.push({
             id: socket.id,
             username: username,
             symbol: playerSymbol
         });
 
-        socket.playerSymbol = playerSymbol;  // Oyuncunun sembolünü sakla
+        socket.playerSymbol = playerSymbol;
 
-        console.log(`${username}, ${room} odasına katıldı. Sembol: ${playerSymbol}`);
+        console.log(`${username} (${playerSymbol}), ${room} odasına katıldı`);
 
-        // Oda içindeki oyuncu listesini hazırla
-        const playersInfo = rooms[room].players.map(p => ({
-            username: p.username,
-            symbol: p.symbol
-        }));
-
-        // 🆕 Oyuncuya kendi sembolünü ve oyuncu listesini söyle
+        // Oyuncuya sembolünü bildir
         socket.emit('assignedSymbol', { 
-            symbol: playerSymbol,
-            currentTurn: rooms[room].currentTurn,
-            players: playersInfo
+            symbol: playerSymbol
         });
 
-        // Odadaki DİĞER oyuncuya haber ver
+        // Oyun durumunu gönder
+        const gameState = {
+            board: roomData.board,
+            currentTurn: roomData.currentTurn,
+            gameActive: roomData.gameActive,
+            winner: roomData.winner,
+            winningIndices: roomData.winningIndices,
+            players: roomData.players.map(p => ({
+                username: p.username,
+                symbol: p.symbol
+            }))
+        };
+
+        socket.emit('gameState', gameState);
+
+        // Diğer oyuncuya bildir
         socket.to(room).emit('playerJoined', { 
             username,
-            symbol: playerSymbol 
+            symbol: playerSymbol,
+            players: gameState.players
         });
 
-        // 🆕 Tüm odaya güncel oyuncu listesini gönder
-        io.to(room).emit('playersUpdate', {
-            players: playersInfo
-        });
-
-        // 🆕 Eğer 2 oyuncu da geldiyse oyun başlasın
-        if (rooms[room].players.length === 2) {
+        // İki oyuncu da varsa oyun başlasın
+        if (roomData.players.length === 2) {
             io.to(room).emit('gameReady', {
                 message: 'Oyun başlıyor!',
-                currentTurn: rooms[room].currentTurn
+                gameState: gameState
             });
         }
     });
 
-    // 2️⃣ HAMLE YAPMA - SIRA KONTROLÜ İLE
+    // 2️⃣ HAMLE YAPMA - TÜM KONTROLLER BACKEND'DE
     socket.on('playerMove', (data) => {
         const room = socket.room;
         const roomData = rooms[room];
 
         if (!roomData) {
             console.log('❌ Oda bulunamadı!');
+            socket.emit('error', { message: 'Oda bulunamadı!' });
             return;
         }
 
-        // 🔒 SIRA KONTROLÜ - En önemli kısım!
+        const { index } = data;
+
+        // ✅ KONTROL 1: Oyun aktif mi?
+        if (!roomData.gameActive) {
+            console.log('❌ Oyun bitti!');
+            socket.emit('invalidMove', { message: 'Oyun bitti!' });
+            return;
+        }
+
+        // ✅ KONTROL 2: Sıra bu oyuncuda mı?
         if (socket.playerSymbol !== roomData.currentTurn) {
             console.log(`❌ ${socket.username} sırası olmadan hamle yapmaya çalıştı!`);
-            socket.emit('invalidMove', { 
-                message: 'Senin sıran değil!' 
-            });
+            socket.emit('invalidMove', { message: 'Senin sıran değil!' });
             return;
         }
 
-        // 🔒 Hücre boş mu kontrol et
-        if (roomData.board[data.index] !== '') {
+        // ✅ KONTROL 3: İndeks geçerli mi?
+        if (index < 0 || index > 8) {
+            console.log('❌ Geçersiz indeks!');
+            socket.emit('invalidMove', { message: 'Geçersiz hamle!' });
+            return;
+        }
+
+        // ✅ KONTROL 4: Hücre boş mu?
+        if (roomData.board[index] !== '') {
             console.log('❌ Bu hücre dolu!');
-            socket.emit('invalidMove', { 
-                message: 'Bu hücre dolu!' 
-            });
+            socket.emit('invalidMove', { message: 'Bu hücre dolu!' });
             return;
         }
 
-        // ✅ Hamle geçerli - kaydet ve ilet
-        roomData.board[data.index] = socket.playerSymbol;
+        // ✅ HAMLE GEÇERLİ - Uygula
+        roomData.board[index] = socket.playerSymbol;
         
-        console.log(`✅ ${socket.username} (${socket.playerSymbol}) hamle yaptı: ${data.index}`);
+        console.log(`✅ ${socket.username} (${socket.playerSymbol}) hamle yaptı: ${index}`);
 
-        // Sırayı değiştir
-        roomData.currentTurn = roomData.currentTurn === 'X' ? 'O' : 'X';
+        // 🏆 Kazananı kontrol et
+        const winner = checkWinner(roomData.board);
+        const isDraw = checkDraw(roomData.board);
 
-        // Herkese hamleyi bildir
-        io.to(room).emit('moveMade', {
-            index: data.index,
-            player: socket.playerSymbol,
-            currentTurn: roomData.currentTurn
-        });
+        if (winner) {
+            roomData.winner = winner;
+            roomData.gameActive = false;
+            roomData.winningIndices = getWinningIndices(roomData.board, winner);
+            
+            console.log(`🏆 ${winner} kazandı!`);
+        } else if (isDraw) {
+            roomData.gameActive = false;
+            console.log('🤝 Berabere!');
+        } else {
+            // Sırayı değiştir
+            roomData.currentTurn = roomData.currentTurn === 'X' ? 'O' : 'X';
+        }
+
+        // 📡 Güncel oyun durumunu herkese gönder
+        const gameState = {
+            board: roomData.board,
+            currentTurn: roomData.currentTurn,
+            gameActive: roomData.gameActive,
+            winner: roomData.winner,
+            winningIndices: roomData.winningIndices,
+            lastMove: {
+                index: index,
+                player: socket.playerSymbol
+            }
+        };
+
+        io.to(room).emit('gameState', gameState);
+
+        // Özel mesajlar
+        if (winner) {
+            io.to(room).emit('gameOver', {
+                winner: winner,
+                winningIndices: roomData.winningIndices,
+                message: `${winner} kazandı!`
+            });
+        } else if (isDraw) {
+            io.to(room).emit('gameOver', {
+                winner: null,
+                message: 'Berabere!'
+            });
+        }
     });
 
     // 3️⃣ SIFIRLAMA
     socket.on('requestReset', () => {
         const room = socket.room;
         
-        if (rooms[room]) {
-            rooms[room].board = Array(9).fill('');
-            rooms[room].currentTurn = 'X';
-            rooms[room].gameActive = true;
-            
-            io.to(room).emit('gameReset', {
-                currentTurn: 'X'
-            });
+        if (!rooms[room]) {
+            return;
         }
+
+        const roomData = rooms[room];
+
+        // Oyunu sıfırla
+        roomData.board = Array(9).fill('');
+        roomData.currentTurn = 'X';
+        roomData.gameActive = true;
+        roomData.winner = null;
+        roomData.winningIndices = [];
+
+        console.log(`🔄 ${room} odası sıfırlandı`);
+
+        // Yeni oyun durumunu gönder
+        const gameState = {
+            board: roomData.board,
+            currentTurn: roomData.currentTurn,
+            gameActive: roomData.gameActive,
+            winner: roomData.winner,
+            winningIndices: roomData.winningIndices
+        };
+
+        io.to(room).emit('gameState', gameState);
+        io.to(room).emit('gameReset', { message: 'Yeni oyun başlıyor!' });
     });
 
     // 4️⃣ AYRILMA
@@ -149,6 +279,11 @@ io.on('connection', (socket) => {
             // Oyuncuyu listeden çıkar
             rooms[room].players = rooms[room].players.filter(p => p.id !== socket.id);
             
+            // Kalan oyuncuya bildir
+            socket.to(room).emit('playerLeft', {
+                message: `${socket.username} oyundan ayrıldı.`
+            });
+
             // Oda boşsa sil
             if (rooms[room].players.length === 0) {
                 delete rooms[room];
@@ -161,4 +296,6 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
     console.log(`🚀 Sunucu http://localhost:${PORT} adresinde hazır!`);
+    console.log(`✅ CORS aktif: GitHub Pages bağlanabilir`);
+    console.log(`🎮 Oyun mantığı tamamen backend'de çalışıyor`);
 });
